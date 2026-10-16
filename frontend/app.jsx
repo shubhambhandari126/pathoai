@@ -28,6 +28,26 @@ const Read = ({v}) => <span className={"pill " + v}>{v}</span>;
 const Card = ({k, v, sub}) => <div className="card"><div className="k">{k}</div>
   <div className="v">{v} {sub && <small>{sub}</small>}</div></div>;
 const readLabel = (r)=> r==="tumor"?"tumour":r;
+
+// Large uploads are shrunk in the browser before analysis. The server tiles the
+// image and runs the model on every tile, which takes a minute or more for a
+// phone-sized photo on a small VM, long enough for the browser to give up.
+// 1024 px on the long side keeps an analysis around 10-15 s and the upload small.
+const MAX_SIDE = 1024;
+const shrinkImage = (dataUrl, maxSide = MAX_SIDE) => new Promise((resolve) => {
+  const im = new Image();
+  im.onload = () => {
+    const s = Math.min(1, maxSide / Math.max(im.width, im.height));
+    if (s >= 1) return resolve({dataUrl, width: im.width, height: im.height, shrunk: false});
+    const c = document.createElement("canvas");
+    c.width = Math.round(im.width * s); c.height = Math.round(im.height * s);
+    c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+    resolve({dataUrl: c.toDataURL("image/jpeg", 0.92), width: c.width, height: c.height,
+             shrunk: true, from: [im.width, im.height]});
+  };
+  im.onerror = () => resolve({dataUrl, shrunk: false});   // not decodable here; let the server try
+  im.src = dataUrl;
+});
 const readPill = (r)=> <span className={"pill "+(r==="tumor"?"tumor":r==="normal"?"normal":"uncertain")}>{readLabel(r)}</span>;
 const IMG = {width:150,height:150,objectFit:"cover",border:"1px solid var(--line)",borderRadius:10};
 
@@ -98,6 +118,8 @@ function GuidedFlow() {
   const [zoom, setZoom] = useState(null);
   const [modelMsg, setModelMsg] = useState("Checking model…");
   const [retrainMsg, setRetrainMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
 
   useEffect(() => { api.feedbackStats().then(setStats);
     api.modelInfo().then(mi => {
@@ -111,9 +133,15 @@ function GuidedFlow() {
       const a=res.metrics&&res.metrics.test_auroc; setModelMsg("Loaded "+f.name+(a?" · test AUROC "+a.toFixed(2):"")+". Analyze an image to use it.");
     }catch(err){ setModelMsg("Could not load that file."); } }; r.readAsDataURL(f); };
   const pick = (e) => { const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-    r.onload=()=>{ setImg(r.result); setRes(null); setDecision(null); }; r.readAsDataURL(f); };
-  const run = async () => { if(!img)return; setBusy(true); setRes(null); setDecision(null);
-    try{ setRes(await api.analyzeImage(img)); } finally{ setBusy(false); } };
+    r.onload=async()=>{ const sh=await shrinkImage(r.result); setImg(sh.dataUrl); setRes(null); setDecision(null); setErr("");
+      setNote(sh.shrunk?`Large image reduced from ${sh.from[0]}×${sh.from[1]} to ${sh.width}×${sh.height} px for analysis.`:""); };
+    r.readAsDataURL(f); };
+  const run = async () => { if(!img)return; setBusy(true); setRes(null); setDecision(null); setErr("");
+    try{ const r = await api.analyzeImage(img);
+      if(!r || r.error || !r.combined) setErr("The server could not analyze this image" + (r && r.error ? ": " + r.error : "") + ".");
+      else setRes(r);
+    } catch(e){ setErr("The analysis did not finish. The server may still be busy with it; wait a minute and try again, or use a smaller image."); }
+    finally{ setBusy(false); } };
   const confirmRead = async (label) => {
     const matched = res.combined.read===label;
     setDecision({label, matched, saving:true});
@@ -122,7 +150,7 @@ function GuidedFlow() {
     setDecision({label, matched, learned: r.retrained, auroc: r.val_auroc});
     if (r.retrained) setModelMsg("Model updated from submissions"+(r.val_auroc?" · val AUROC "+r.val_auroc:"")+" (saved).");
   };
-  const reset = () => { setImg(null); setRes(null); setDecision(null); };
+  const reset = () => { setImg(null); setRes(null); setDecision(null); setErr(""); setNote(""); };
   const retrain = async () => { setRetrainMsg("Fine-tuning on your submitted labels… this can take a minute.");
     try { const r = await api.retrain(3);
       setModelMsg("Retrained on your labels · val AUROC " + r.val_auroc + ". Now in use.");
@@ -142,6 +170,9 @@ function GuidedFlow() {
       <div style={{fontSize:13,color:"var(--muted)",marginBottom:8}}>Choose an H&E image (a small patch or a whole slide). Nothing leaves this machine.</div>
       <input type="file" accept="image/*" onChange={pick}/>
       {img && <button className="btn primary" style={{marginLeft:10}} disabled={busy} onClick={run}>{busy?"Analyzing…":"Analyze case"}</button>}
+      {note && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{note}</div>}
+      {busy && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>This usually takes 10-30 seconds on the server.</div>}
+      {err && <div style={{fontSize:13,color:"var(--warn,#f59e0b)",marginTop:8}}>{err}</div>}
       {img && !res && <div style={{marginTop:10}}><img src={img} style={IMG}/></div>}
     </Step>
 
