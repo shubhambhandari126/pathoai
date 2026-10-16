@@ -1,0 +1,15 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data written by the server (never commit lab data)
+audit_log.jsonl
+data/
+
+# Offline React/Babel bundle created by frontend/vendor_offline.sh
+frontend/vendor/
+
+# OS
+.DS_Store

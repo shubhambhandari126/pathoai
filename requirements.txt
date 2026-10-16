@@ -1,0 +1,7 @@
+torch>=2.0
+torchvision>=0.15
+pillow>=9.0
+numpy>=1.23
+# No sklearn/pandas needed — AUROC, ECE and worklist export are dependency-free.
+# For real PatchCamelyon download, torchvision also needs h5py:
+h5py>=3.0
