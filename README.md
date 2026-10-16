@@ -46,7 +46,9 @@ PathoAI is a **second-reader QA tool** for histopathology. A pathologist (or an 
 - `backend/qa_service.py` — `QASession`: inference, feedback storage, fine-tuning, audit log.
 - `pathqa/` — model definition, data loaders, slide tiling, Grad-CAM, calibration, CLI.
 - `frontend/` — `index.html` + `app.jsx` (React via CDN; run `frontend/vendor_offline.sh` for air-gapped use).
-- `model.pt` — trained ResNet18 weights (45 MB, committed).
+- `model.pt` — trained ResNet18 weights (45 MB, committed). Same checkpoint the live site runs; its held-out metrics (test AUROC 0.929, accuracy 0.820, ECE 0.020) are what `/api/model-info` reports.
+- `training/` — the scripts that trained `model.pt` and that fine-tune it (see Training).
+- `DOCS.md` — longer design notes carried over from the original PathQA build: QA logic, calibration, workload budget, API, tuning `tau`.
 - `setup_oracle.sh`, `setup_domain.sh` — VM deploy scripts (see Deploy).
 
 ## Run locally
@@ -72,9 +74,30 @@ The server picks up `model.pt` from the repo root automatically. Optional enviro
 
 `data/` and `audit_log.jsonl` are git-ignored so lab data is never committed.
 
+## Training
+
+`model.pt` was produced with the scripts in `training/` on a GPU (Google Colab works) and then committed here; the server loads it as-is. The committed checkpoint's embedded note says it was "trained/continued on PatchCamelyon (HF mirror)", i.e. `train_pcam_hf.py --base` continuing from a PathMNIST model made with `train_open.py`, which is the PathMNIST + PatchCamelyon merge described above. Run the scripts from the repo root so `pathqa` is importable:
+
+```bash
+pip install medmnist datasets   # the open datasets the trainers download
+PYTHONPATH=. python3 training/train_open.py --epochs 3 --out model.pt
+PYTHONPATH=. python3 training/train_pcam_hf.py --base model.pt --epochs 2 --out model.pt
+```
+
+| Script | Purpose |
+|---|---|
+| `train_open.py` | PathMNIST (colorectal, ~100k tiles, auto-download), binarised tumour vs rest |
+| `train_pcam_hf.py` | PatchCamelyon (~327k lymph-node tiles) via the Hugging Face `datasets` mirror; `--base` continues from an existing checkpoint |
+| `train_combined.py` | both datasets mixed into one run (avoids forgetting the first) |
+| `train_pcam.py` | PatchCamelyon via torchvision (7 GB download); `--synthetic` checks the pipeline with no download |
+| `train_on_your_data.py` | fine-tune on a lab's own `train/{normal,tumor}` and `val/{normal,tumor}` folders |
+| `finetune_from_feedback.py` | fine-tune on cases submitted through the app (`data/feedback/`) |
+
+Every script saves the weights plus the fitted temperature and held-out metrics in one checkpoint, which is what `/api/model-info` reports. See `DOCS.md` for the design notes behind the QA logic and calibration.
+
 ## Deploy
 
-- `setup_oracle.sh <access-code>` — one-shot installer for an Ubuntu VM (adds swap on small boxes, installs deps, pulls the app, sets up a systemd service, opens the firewall). The live app runs this way on an Oracle Always-Free VM. Note: the script currently fetches the code and `model.pt` from the Hugging Face Space `Shubhambhandari/Pathify`, not from this repo.
+- `setup_oracle.sh <access-code>` — one-shot installer for an Ubuntu VM (adds swap on small boxes, installs deps, clones this repo, installs its committed `model.pt`, sets up a systemd service, opens the firewall). The live app runs this way on an Oracle Always-Free VM. On the VM: `curl -sL https://raw.githubusercontent.com/shubhambhandari126/pathoai/main/setup_oracle.sh | sudo bash -s -- <access-code>`. Re-running it on an existing VM re-clones `main`, refreshes `model.pt` and restarts the service.
 - `setup_domain.sh <domain>` — puts the app behind a domain with automatic free HTTPS via Caddy + Let's Encrypt (moves the app to port 8080 and proxies 443 to it).
 
 ## Disclaimer

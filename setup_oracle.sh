@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Pathify one-shot installer for an Oracle Always-Free Ubuntu VM (ARM or x86).
-# Usage (on the VM):  curl -sL <this-url> | sudo bash -s -- YOUR_ACCESS_CODE
+# PathoAI one-shot installer for an Oracle Always-Free Ubuntu VM (ARM or x86).
+# Pulls the app code and the trained model.pt from the GitHub repo
+# (https://github.com/shubhambhandari126/pathoai), which is the source of truth.
+# Usage (on the VM):
+#   curl -sL https://raw.githubusercontent.com/shubhambhandari126/pathoai/main/setup_oracle.sh | sudo bash -s -- YOUR_ACCESS_CODE
 set -euo pipefail
 
 PASSCODE="${1:?usage: setup_oracle.sh <access-code>}"
 APP=/opt/pathify
-HF=https://huggingface.co/spaces/Shubhambhandari/Pathify
+REPO=https://github.com/shubhambhandari126/pathoai
+SRC=/tmp/pathoai_src
 
-echo "[pathify] 0/5 checking memory, adding swap on small boxes..."
+echo "[pathoai] 0/5 checking memory, adding swap on small boxes..."
 MEM_MB=$(free -m | awk '/^Mem:/{print $2}')
 if [ "${MEM_MB:-0}" -lt 4000 ] && [ ! -f /swapfile ]; then
-  echo "[pathify] low RAM (${MEM_MB}MB) -> creating 4G swap"
+  echo "[pathoai] low RAM (${MEM_MB}MB) -> creating 4G swap"
   fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
   chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
   grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
@@ -18,30 +22,30 @@ fi
 # On a small box, skip the demo cohort so boot is light.
 if [ "${MEM_MB:-0}" -lt 4000 ]; then CASES=0; SLIDES=0; else CASES=24; SLIDES=3; fi
 
-echo "[pathify] 1/5 installing system packages..."
+echo "[pathoai] 1/5 installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y python3-pip python3-venv git curl iptables-persistent
 
-echo "[pathify] 2/5 fetching the app code from Hugging Face..."
-rm -rf /tmp/hf_src
-git clone --depth 1 "$HF" /tmp/hf_src
+echo "[pathoai] 2/5 fetching the app code from GitHub..."
+rm -rf "$SRC"
+git clone --depth 1 "$REPO" "$SRC"
 mkdir -p "$APP"
-cp -r /tmp/hf_src/backend /tmp/hf_src/frontend /tmp/hf_src/pathqa "$APP"/
+cp -r "$SRC/backend" "$SRC/frontend" "$SRC/pathqa" "$APP"/
 
-echo "[pathify] 3/5 downloading the trained model (44 MB)..."
-curl -L -o "$APP/model.pt" "$HF/resolve/main/model.pt"
+echo "[pathoai] 3/5 installing the trained model (44 MB, committed in the repo)..."
+cp "$SRC/model.pt" "$APP/model.pt"
 
-echo "[pathify] 4/5 building python env + torch (several minutes)..."
+echo "[pathoai] 4/5 building python env + torch (several minutes)..."
 python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install --upgrade pip -q
 "$APP/venv/bin/pip" install -q torch torchvision pillow numpy h5py
 mkdir -p "$APP/data/feedback"
 
-echo "[pathify] 5/5 creating the service + opening the port..."
+echo "[pathoai] 5/5 creating the service + opening the port..."
 cat >/etc/systemd/system/pathify.service <<EOF
 [Unit]
-Description=Pathify second-reader QA
+Description=PathoAI second-reader QA
 After=network.target
 
 [Service]
@@ -71,7 +75,7 @@ systemctl restart pathify
 
 IP=$(curl -s ifconfig.me || echo YOUR_VM_PUBLIC_IP)
 echo "=================================================================="
-echo " Pathify is starting (first boot loads the model + builds the"
+echo " PathoAI is starting (first boot loads the model + builds the"
 echo " demo worklist, about 1-2 minutes)."
 echo ""
 echo "   URL:         http://$IP"
